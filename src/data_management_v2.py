@@ -8,13 +8,15 @@ from collections import OrderedDict
 from tqdm import tqdm
 
 # Base data directory
-BASE_DATA_DIR = '/Users/raphaelzstone/Documents/CMU/Research/Ensemble-Analysis/data'
+BASE_DATA_DIR = '/Users/raphaelzstone/Documents/Ensemble-Analysis/data'
 POSCAR_DIR = f'{BASE_DATA_DIR}/3k_poscar'
 ENERGY_DIR = f'{BASE_DATA_DIR}/energies'
 RDF_DIR = f'{BASE_DATA_DIR}/rdfs'
 CF_DIR = f'{BASE_DATA_DIR}/counting_functions'
 STRUCT_DIR = f'{BASE_DATA_DIR}/structures'
 SMOOTH_RDF_DIR = f'{BASE_DATA_DIR}/smooth_rdfs'
+QN_DIR = f'{BASE_DATA_DIR}/qn_distributions'
+BAD_DIR = f'{BASE_DATA_DIR}/bond_angle_distributions'
 
 # Standard parameters
 STANDARD_PARAMS = {
@@ -26,7 +28,7 @@ STANDARD_PARAMS = {
 
 def ensure_directories():
     """Create data directories if they don't exist"""
-    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR]:
+    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR, QN_DIR, BAD_DIR]:
         os.makedirs(directory, exist_ok=True)
 
 def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
@@ -119,6 +121,160 @@ def populate_densities(struct_ids, folder_path=POSCAR_DIR):
         except Exception as e:
             print(f"Error processing density for structure {struct_id}: {e}")
 
+def populate_qn_distributions(struct_ids, folder_path=POSCAR_DIR):
+    """
+    Calculate and save Qn distributions for each structure
+    Qn = number of bridging oxygens per Si atom (n = 0,1,2,3,4)
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to process
+    folder_path : str
+        Path to POSCAR files
+    """
+    ensure_directories()
+    
+    for struct_id in tqdm(struct_ids, desc="Calculating Qn distributions"):
+        try:
+            structure, energy = vasp_to_pymatgen(struct_id, folder_path)
+            
+            # Find Si and O atoms
+            si_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'Si']
+            o_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'O']
+            
+            # Count bridging oxygens for each Si
+            qn_counts = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+            
+            # Distance threshold for Si-O bonds (typical: 1.8 Angstroms)
+            bond_threshold = 1.8
+            
+            for si_idx in si_indices:
+                si_site = structure[si_idx]
+                num_bridging_o = 0
+                
+                # Find O atoms bonded to this Si
+                bonded_o = []
+                for o_idx in o_indices:
+                    dist = structure.get_distance(si_idx, o_idx)
+                    if dist < bond_threshold:
+                        bonded_o.append(o_idx)
+                
+                # For each bonded O, check if it's bridging (bonded to 2 Si)
+                for o_idx in bonded_o:
+                    si_neighbors = 0
+                    for other_si in si_indices:
+                        if other_si != si_idx:
+                            dist = structure.get_distance(o_idx, other_si)
+                            if dist < bond_threshold:
+                                si_neighbors += 1
+                    
+                    # If O is bonded to another Si, it's bridging
+                    if si_neighbors >= 1:
+                        num_bridging_o += 1
+                
+                # Count this Si's Qn value
+                if num_bridging_o <= 4:
+                    qn_counts[num_bridging_o] += 1
+            
+            # Convert to fractions
+            total_si = len(si_indices)
+            qn_fractions = {n: count/total_si for n, count in qn_counts.items()}
+            
+            qn_data = {
+                'qn_counts': qn_counts,
+                'qn_fractions': qn_fractions,
+                'total_si': total_si,
+                'params': {
+                    'bond_threshold': bond_threshold,
+                    'source': f'{struct_id}.vasp'
+                }
+            }
+            
+            filepath = os.path.join(QN_DIR, f'{struct_id}_qn.pkl')
+            with open(filepath, 'wb') as f:
+                pickle.dump(qn_data, f)
+                
+        except Exception as e:
+            print(f"Error processing Qn for structure {struct_id}: {e}")
+
+def populate_bond_angle_distributions(struct_ids, folder_path=POSCAR_DIR, 
+                                     angle_range=(60, 180), bins=120):
+    """
+    Calculate and save bond angle distributions for each structure
+    Focuses on Si-O-Si angles (most important for glass structure)
+    """
+    ensure_directories()
+    
+    for struct_id in tqdm(struct_ids, desc="Calculating bond angle distributions"):
+        try:
+            structure, energy = vasp_to_pymatgen(struct_id, folder_path)
+            
+            # Find Si and O atoms
+            si_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'Si']
+            o_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'O']
+            
+            # Distance threshold for bonds
+            bond_threshold = 1.8
+            
+            # Collect all Si-O-Si angles
+            angles = []
+            
+            for o_idx in o_indices:
+                # Find Si atoms bonded to this O
+                bonded_si = []
+                for si_idx in si_indices:
+                    dist = structure.get_distance(o_idx, si_idx)
+                    if dist < bond_threshold:
+                        bonded_si.append(si_idx)
+                
+                # If O is bridging (bonded to 2 Si), calculate angle
+                if len(bonded_si) == 2:
+                    si1_idx, si2_idx = bonded_si
+                    
+                    # Get all three distances with PBC
+                    d_si1_o = structure.get_distance(si1_idx, o_idx)
+                    d_si2_o = structure.get_distance(si2_idx, o_idx)
+                    d_si1_si2 = structure.get_distance(si1_idx, si2_idx)
+                    
+                    # Calculate angle using law of cosines
+                    # For angle at O: cos(angle) = (d1^2 + d2^2 - d_si_si^2) / (2*d1*d2)
+                    cos_angle = (d_si1_o**2 + d_si2_o**2 - d_si1_si2**2) / (2 * d_si1_o * d_si2_o)
+                    cos_angle = np.clip(cos_angle, -1, 1)
+                    angle = np.degrees(np.arccos(cos_angle))
+                    
+                    angles.append(angle)
+            
+            # Create histogram
+            hist, bin_edges = np.histogram(angles, bins=bins, range=angle_range)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+            
+            # Normalize to probability distribution
+            hist_normalized = hist / (np.sum(hist) * (bin_edges[1] - bin_edges[0]))
+            
+            bad_data = {
+                'angles': np.array(angles),
+                'histogram': hist_normalized,
+                'bin_centers': bin_centers,
+                'bin_edges': bin_edges,
+                'num_angles': len(angles),
+                'mean_angle': np.mean(angles) if angles else 0,
+                'std_angle': np.std(angles) if angles else 0,
+                'params': {
+                    'bond_threshold': bond_threshold,
+                    'angle_range': angle_range,
+                    'bins': bins,
+                    'source': f'{struct_id}.vasp'
+                }
+            }
+            
+            filepath = os.path.join(BAD_DIR, f'{struct_id}_bad.pkl')
+            with open(filepath, 'wb') as f:
+                pickle.dump(bad_data, f)
+                
+        except Exception as e:
+            print(f"Error processing BAD for structure {struct_id}: {e}")
+                                  
 def populate_energies(struct_ids, folder_path=POSCAR_DIR):
     """
     Extract energies from POSCAR files and save to individual files
@@ -653,6 +809,60 @@ def load_densities(struct_ids):
     
     return densities
 
+def load_qn_distributions(struct_ids):
+    """
+    Load Qn distribution data for specified structures
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to load
+        
+    Returns:
+    --------
+    dict : {struct_id: qn_data}
+    """
+    qn_data = {}
+    
+    for struct_id in struct_ids:
+        filepath = os.path.join(QN_DIR, f'{struct_id}_qn.pkl')
+        try:
+            with open(filepath, 'rb') as f:
+                qn_data[struct_id] = pickle.load(f)
+        except FileNotFoundError:
+            print(f"Warning: Qn file not found for structure {struct_id}")
+        except Exception as e:
+            print(f"Error loading Qn for structure {struct_id}: {e}")
+    
+    return qn_data
+
+def load_bond_angle_distributions(struct_ids):
+    """
+    Load bond angle distribution data for specified structures
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to load
+        
+    Returns:
+    --------
+    dict : {struct_id: bad_data}
+    """
+    bad_data = {}
+    
+    for struct_id in struct_ids:
+        filepath = os.path.join(BAD_DIR, f'{struct_id}_bad.pkl')
+        try:
+            with open(filepath, 'rb') as f:
+                bad_data[struct_id] = pickle.load(f)
+        except FileNotFoundError:
+            print(f"Warning: BAD file not found for structure {struct_id}")
+        except Exception as e:
+            print(f"Error loading BAD for structure {struct_id}: {e}")
+    
+    return bad_data
+
 # =====================================================================
 # UTILITY FUNCTIONS
 # =====================================================================
@@ -724,13 +934,16 @@ def populate_all_data(struct_ids, folder_path=POSCAR_DIR, **kwargs):
     folder_path : str
         Path to POSCAR files
     **kwargs : dict
-        Additional parameters for RDF/CF calculations
+        Additional parameters for calculations
     """
     print("Populating all data types...")
     populate_energies(struct_ids, folder_path)
     populate_structures(struct_ids, folder_path)
+    populate_densities(struct_ids, folder_path)
     populate_rdfs(struct_ids, folder_path, **kwargs)
     populate_counting_functions(struct_ids, folder_path, **kwargs)
+    populate_qn_distributions(struct_ids, folder_path)
+    populate_bond_angle_distributions(struct_ids, folder_path, **kwargs)
     print("All data populated successfully!")
 
 def check_data_availability(struct_ids, data_types=None):
@@ -778,3 +991,5 @@ def check_data_availability(struct_ids, data_types=None):
             availability[struct_id]['cfs'] = sum(cf_exists)
     
     return availability
+
+    
