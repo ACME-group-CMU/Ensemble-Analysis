@@ -6,8 +6,8 @@ from ase.io import read
 from pymatgen.io.ase import AseAtomsAdaptor
 from collections import OrderedDict
 from tqdm import tqdm
+from src.rings import calculate_ensemble_ring_statistics, calculate_ring_statistics_for_structure
 
-# Base data directory
 BASE_DATA_DIR = '/Users/raphaelzstone/Documents/Ensemble-Analysis/data'
 POSCAR_DIR = f'{BASE_DATA_DIR}/3k_poscar'
 ENERGY_DIR = f'{BASE_DATA_DIR}/energies'
@@ -17,6 +17,7 @@ STRUCT_DIR = f'{BASE_DATA_DIR}/structures'
 SMOOTH_RDF_DIR = f'{BASE_DATA_DIR}/smooth_rdfs'
 QN_DIR = f'{BASE_DATA_DIR}/qn_distributions'
 BAD_DIR = f'{BASE_DATA_DIR}/bond_angle_distributions'
+RING_DIR = f'{BASE_DATA_DIR}/ring_statistics'
 
 # Standard parameters
 STANDARD_PARAMS = {
@@ -28,7 +29,7 @@ STANDARD_PARAMS = {
 
 def ensure_directories():
     """Create data directories if they don't exist"""
-    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR, QN_DIR, BAD_DIR]:
+    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR, QN_DIR, BAD_DIR, RING_DIR]:
         os.makedirs(directory, exist_ok=True)
 
 def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
@@ -612,6 +613,41 @@ def smooth_all_rdfs(w=0.03, overwrite=False):
     print(f"Errors: {errors}")
     print(f"Smoothed RDFs saved to: {SMOOTH_RDF_DIR}")
 
+def populate_ring_statistics(struct_ids, folder_path=POSCAR_DIR, cutoffs=None, max_ring_size=20):
+    """
+    Calculate and save ring statistics for structures.
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to process
+    folder_path : str
+        Path to POSCAR files
+    cutoffs : dict, optional
+        Custom bond cutoffs
+    max_ring_size : int
+        Maximum ring size to search for
+    """
+    ensure_directories()
+    
+    from tqdm import tqdm
+    
+    for struct_id in tqdm(struct_ids, desc="Calculating ring statistics"):
+        # Load structure
+        structure, _ = vasp_to_pymatgen(struct_id, folder_path)
+        
+        # Calculate ring statistics
+        ring_stats = calculate_ring_statistics_for_structure(
+            structure, 
+            cutoffs=cutoffs,
+            max_ring_size=max_ring_size
+        )
+        
+        # Save to file
+        output_file = os.path.join(RING_DIR, f'{struct_id}_rings.pkl')
+        with open(output_file, 'wb') as f:
+            pickle.dump(ring_stats, f)
+
 # =====================================================================
 # LOADING FUNCTIONS (Read data from disk)
 # =====================================================================
@@ -863,6 +899,32 @@ def load_bond_angle_distributions(struct_ids):
     
     return bad_data
 
+def load_ring_statistics(struct_ids):
+    """
+    Load ring statistics from saved files.
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to load
+        
+    Returns:
+    --------
+    dict : Dictionary mapping struct_id -> ring_statistics
+    """
+    ring_stats = {}
+    
+    for struct_id in struct_ids:
+        ring_file = os.path.join(RING_DIR, f'{struct_id}_rings.pkl')
+        
+        if os.path.exists(ring_file):
+            with open(ring_file, 'rb') as f:
+                ring_stats[struct_id] = pickle.load(f)
+        else:
+            print(f"Warning: Ring statistics not found for structure {struct_id}")
+    
+    return ring_stats
+
 # =====================================================================
 # UTILITY FUNCTIONS
 # =====================================================================
@@ -992,4 +1054,103 @@ def check_data_availability(struct_ids, data_types=None):
     
     return availability
 
+def calculate_ensemble_qn(struct_ids):
+    """
+    Calculate ensemble-averaged Qn distribution with uniform weights
     
+    Parameters:
+    -----------
+    struct_ids : list of int
+    
+    Returns:
+    --------
+    dict : {'qn_fractions': {0: frac, 1: frac, ...}}
+    """
+    # Load data
+    qn_data = load_qn_distributions(struct_ids)
+    
+    # Equal weights
+    weight = 1.0 / len(struct_ids)
+    
+    # Ensemble average
+    ensemble_qn = {n: 0.0 for n in range(5)}
+    
+    for struct_id in struct_ids:
+        if struct_id in qn_data:
+            qn_fracs = qn_data[struct_id]['qn_fractions']
+            
+            for n in range(5):
+                ensemble_qn[n] += weight * qn_fracs.get(n, 0)
+    
+    # Normalize to ensure sum = 1
+    total = sum(ensemble_qn.values())
+    if total > 0:
+        ensemble_qn = {n: frac/total for n, frac in ensemble_qn.items()}
+    
+    return {'qn_fractions': ensemble_qn}
+
+def calculate_ensemble_bad(struct_ids, bins=60):
+    """
+    Calculate ensemble-averaged bond angle distribution with uniform weights
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+    bins : int
+        Number of bins for histogram (default: 60 for smoother plot)
+    
+    Returns:
+    --------
+    dict : {'bin_centers': array, 'histogram': array, 'mean': float, 'std': float}
+    """
+    # Load data
+    bad_data = load_bond_angle_distributions(struct_ids)
+    
+    # Pool all angles with equal weights
+    all_angles = []
+    
+    for struct_id in struct_ids:
+        if struct_id in bad_data:
+            angles = bad_data[struct_id]['angles']
+            all_angles.extend(angles)
+    
+    all_angles = np.array(all_angles)
+    
+    # Calculate statistics
+    mean_angle = np.mean(all_angles)
+    std_angle = np.std(all_angles)
+    
+    # Create histogram
+    hist, bin_edges = np.histogram(all_angles, bins=bins, range=(60, 180))
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    
+    # Normalize to probability density
+    hist_normalized = hist / (np.sum(hist) * (bin_edges[1] - bin_edges[0]))
+    
+    return {
+        'bin_centers': bin_centers,
+        'histogram': hist_normalized,
+        'mean': mean_angle,
+        'std': std_angle
+    }
+    
+def check_ring_data_availability(struct_ids):
+    """
+    Check which structures have ring statistics computed.
+    
+    Parameters:
+    -----------
+    struct_ids : list of int
+        Structure IDs to check
+        
+    Returns:
+    --------
+    dict : Dictionary mapping struct_id -> bool (whether rings exist)
+    """
+    availability = {}
+    
+    for struct_id in struct_ids:
+        ring_file = os.path.join(RING_DIR, f'{struct_id}_rings.pkl')
+        availability[struct_id] = os.path.exists(ring_file)
+    
+    return availability
