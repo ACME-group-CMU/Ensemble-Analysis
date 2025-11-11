@@ -8,7 +8,7 @@ from collections import OrderedDict
 from tqdm import tqdm
 from src.rings import calculate_ensemble_ring_statistics, calculate_ring_statistics_for_structure
 
-BASE_DATA_DIR = '/Users/raphaelzstone/Documents/Ensemble-Analysis/data'
+BASE_DATA_DIR = 'data'
 POSCAR_DIR = f'{BASE_DATA_DIR}/3k_poscar'
 ENERGY_DIR = f'{BASE_DATA_DIR}/energies'
 RDF_DIR = f'{BASE_DATA_DIR}/rdfs'
