@@ -9,7 +9,7 @@ from tqdm import tqdm
 from src.rings import calculate_ensemble_ring_statistics, calculate_ring_statistics_for_structure
 
 BASE_DATA_DIR = 'data'
-POSCAR_DIR = f'{BASE_DATA_DIR}/3k_poscar'
+POSCAR_DIR = f'{BASE_DATA_DIR}/vasps'
 ENERGY_DIR = f'{BASE_DATA_DIR}/energies'
 RDF_DIR = f'{BASE_DATA_DIR}/rdfs'
 CF_DIR = f'{BASE_DATA_DIR}/counting_functions'
@@ -36,14 +36,14 @@ def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
     """
     Read a VASP POSCAR file and convert it to a pymatgen Structure object.
     Also extracts energy from the first line if available.
-    
+
     Parameters:
     -----------
-    struct_id : int
-        Structure ID number
+    struct_id : str
+        Structure ID (e.g., 'SiO2_36_481' or 'SiO2_24_2')
     folder_path : str
         Path to the folder containing VASP files
-    
+
     Returns:
     --------
     tuple : (pymatgen_structure, energy)
@@ -74,11 +74,11 @@ def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
 def populate_densities(struct_ids, folder_path=POSCAR_DIR):
     """
     Calculate and save number densities for each structure
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     """
@@ -126,11 +126,11 @@ def populate_qn_distributions(struct_ids, folder_path=POSCAR_DIR):
     """
     Calculate and save Qn distributions for each structure
     Qn = number of bridging oxygens per Si atom (n = 0,1,2,3,4)
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     """
@@ -279,11 +279,11 @@ def populate_bond_angle_distributions(struct_ids, folder_path=POSCAR_DIR,
 def populate_energies(struct_ids, folder_path=POSCAR_DIR):
     """
     Extract energies from POSCAR files and save to individual files
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     """
@@ -309,11 +309,11 @@ def populate_energies(struct_ids, folder_path=POSCAR_DIR):
 def populate_structures(struct_ids, folder_path=POSCAR_DIR):
     """
     Convert and save pymatgen structures to individual files
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     """
@@ -335,15 +335,15 @@ def populate_structures(struct_ids, folder_path=POSCAR_DIR):
         except Exception as e:
             print(f"Error processing structure {struct_id}: {e}")
 
-def populate_rdfs(struct_ids, folder_path=POSCAR_DIR, r_range=(0, 10), bins=1000, 
+def populate_rdfs(struct_ids, folder_path=POSCAR_DIR, r_range=(0, 10), bins=1000,
                   element_pairs=None, temperature=1800):
     """
     Calculate and save RDFs for each structure
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     r_range : tuple
@@ -396,15 +396,15 @@ def populate_rdfs(struct_ids, folder_path=POSCAR_DIR, r_range=(0, 10), bins=1000
         except Exception as e:
             print(f"Error processing RDF for structure {struct_id}: {e}")
 
-def populate_counting_functions(struct_ids, folder_path=POSCAR_DIR, r_range=(0, 10), 
+def populate_counting_functions(struct_ids, folder_path=POSCAR_DIR, r_range=(0, 10),
                                bins=200, element_pairs=None, temperature=1800):
     """
     Calculate and save counting functions for each structure
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     r_range : tuple
@@ -616,11 +616,11 @@ def smooth_all_rdfs(w=0.03, overwrite=False):
 def populate_ring_statistics(struct_ids, folder_path=POSCAR_DIR, cutoffs=None, max_ring_size=20):
     """
     Calculate and save ring statistics for structures.
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     cutoffs : dict, optional
@@ -655,12 +655,12 @@ def populate_ring_statistics(struct_ids, folder_path=POSCAR_DIR, cutoffs=None, m
 def load_energies(struct_ids):
     """
     Load energy data for specified structures
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : {struct_id: energy_value}
@@ -683,12 +683,12 @@ def load_energies(struct_ids):
 def load_structures(struct_ids):
     """
     Load pymatgen structures for specified structures
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : {struct_id: pymatgen_structure}
@@ -711,17 +711,17 @@ def load_structures(struct_ids):
 def load_rdfs(struct_ids, pairs='all', smoothed=False):
     """
     Load RDF data for specified structures and pairs
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     pairs : str or list
-        'all' for all available pairs, 'total' for total RDF, 
+        'all' for all available pairs, 'total' for total RDF,
         or list like ['Si_Si', 'Si_O'] for specific pairs
     smoothed : bool
         If True, load from SMOOTH_RDF_DIR. If False, load from RDF_DIR (default: False)
-        
+
     Returns:
     --------
     dict : {struct_id: {pair: (r_values, g_r)} or {struct_id: (r_values, g_r)} for total}
@@ -774,14 +774,14 @@ def load_rdfs(struct_ids, pairs='all', smoothed=False):
 def load_counting_functions(struct_ids, pairs='all'):
     """
     Load counting function data for specified structures and pairs
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     pairs : str or list
         'all' for all available pairs or list like ['Si_Si', 'Si_O'] for specific pairs
-        
+
     Returns:
     --------
     dict : {struct_id: {pair: (r_values, counting_func)}}
@@ -822,12 +822,12 @@ def load_counting_functions(struct_ids, pairs='all'):
 def load_densities(struct_ids):
     """
     Load density data for specified structure IDs
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : Dictionary mapping struct_id to density data
@@ -848,12 +848,12 @@ def load_densities(struct_ids):
 def load_qn_distributions(struct_ids):
     """
     Load Qn distribution data for specified structures
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : {struct_id: qn_data}
@@ -875,12 +875,12 @@ def load_qn_distributions(struct_ids):
 def load_bond_angle_distributions(struct_ids):
     """
     Load bond angle distribution data for specified structures
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : {struct_id: bad_data}
@@ -902,12 +902,12 @@ def load_bond_angle_distributions(struct_ids):
 def load_ring_statistics(struct_ids):
     """
     Load ring statistics from saved files.
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to load
-        
+    struct_ids : list of str
+        Structure IDs to load (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : Dictionary mapping struct_id -> ring_statistics
@@ -932,16 +932,16 @@ def load_ring_statistics(struct_ids):
 def calculate_ensemble_average_density(struct_ids, energies=None, temperature=1800):
     """
     Calculate Boltzmann-weighted ensemble average density
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs
+    struct_ids : list of str
+        Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     energies : dict, optional
         Energy data {struct_id: energy}
     temperature : float
         Temperature in Kelvin
-        
+
     Returns:
     --------
     dict : Dictionary with average densities
@@ -955,20 +955,19 @@ def calculate_ensemble_average_density(struct_ids, energies=None, temperature=18
     legacy_dict = {}
     for struct_id in struct_ids:
         if struct_id in energies:
-            legacy_dict[str(struct_id)] = {"Energy (Ry)": energies[struct_id]}
-    
+            legacy_dict[struct_id] = {"Energy (Ry)": energies[struct_id]}
+
     # Import here to avoid circular imports
     from src.rdf_v2 import calculate_weights
     weights = calculate_weights(legacy_dict, temperature)
-    int_weights = {int(k): v for k, v in weights.items()}
     
     # Calculate weighted averages
     avg_total_density = 0
     avg_partial_densities = {}
-    
+
     for struct_id in struct_ids:
-        if struct_id in densities and struct_id in int_weights:
-            weight = int_weights[struct_id]
+        if struct_id in densities and struct_id in weights:
+            weight = weights[struct_id]
             density_data = densities[struct_id]
             
             # Add to total density average
@@ -988,11 +987,11 @@ def calculate_ensemble_average_density(struct_ids, energies=None, temperature=18
 def populate_all_data(struct_ids, folder_path=POSCAR_DIR, **kwargs):
     """
     Convenience function to populate all data types for given structure IDs
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to process
+    struct_ids : list of str
+        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
         Path to POSCAR files
     **kwargs : dict
@@ -1011,15 +1010,15 @@ def populate_all_data(struct_ids, folder_path=POSCAR_DIR, **kwargs):
 def check_data_availability(struct_ids, data_types=None):
     """
     Check which data files exist for given structure IDs
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to check
+    struct_ids : list of str
+        Structure IDs to check (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     data_types : list of str
         Data types to check ['energies', 'structures', 'rdfs', 'cfs']
         If None, checks all types
-        
+
     Returns:
     --------
     dict : Summary of available data
@@ -1057,11 +1056,12 @@ def check_data_availability(struct_ids, data_types=None):
 def calculate_ensemble_qn(struct_ids):
     """
     Calculate ensemble-averaged Qn distribution with uniform weights
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-    
+    struct_ids : list of str
+        Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : {'qn_fractions': {0: frac, 1: frac, ...}}
@@ -1092,13 +1092,14 @@ def calculate_ensemble_qn(struct_ids):
 def calculate_ensemble_bad(struct_ids, bins=60):
     """
     Calculate ensemble-averaged bond angle distribution with uniform weights
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
+    struct_ids : list of str
+        Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     bins : int
         Number of bins for histogram (default: 60 for smoother plot)
-    
+
     Returns:
     --------
     dict : {'bin_centers': array, 'histogram': array, 'mean': float, 'std': float}
@@ -1137,12 +1138,12 @@ def calculate_ensemble_bad(struct_ids, bins=60):
 def check_ring_data_availability(struct_ids):
     """
     Check which structures have ring statistics computed.
-    
+
     Parameters:
     -----------
-    struct_ids : list of int
-        Structure IDs to check
-        
+    struct_ids : list of str
+        Structure IDs to check (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+
     Returns:
     --------
     dict : Dictionary mapping struct_id -> bool (whether rings exist)

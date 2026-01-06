@@ -296,9 +296,21 @@ class StructureManager:
         """Print a summary of the managed structures"""
         print(f"StructureManager Summary:")
         print(f"  Total structures: {len(self.struct_ids)}")
-        
+
         if self.struct_ids:
-            print(f"  ID range: {min(self.struct_ids)} - {max(self.struct_ids)}")
+            # Only show ID range if all IDs are integers
+            try:
+                if all(isinstance(x, int) or (isinstance(x, str) and x.isdigit()) for x in self.struct_ids):
+                    numeric_ids = [int(x) if isinstance(x, str) else x for x in self.struct_ids]
+                    print(f"  ID range: {min(numeric_ids)} - {max(numeric_ids)}")
+                else:
+                    # Show sample IDs for string-based naming
+                    sample_ids = list(self.struct_ids)[:5]
+                    print(f"  Sample IDs: {', '.join(str(x) for x in sample_ids)}{' ...' if len(self.struct_ids) > 5 else ''}")
+            except:
+                # Fallback: just show first few IDs
+                sample_ids = list(self.struct_ids)[:5]
+                print(f"  Sample IDs: {', '.join(str(x) for x in sample_ids)}{' ...' if len(self.struct_ids) > 5 else ''}")
             
             # Check data availability
             energies = self.load_energies()

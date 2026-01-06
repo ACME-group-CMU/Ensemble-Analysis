@@ -273,22 +273,19 @@ def calculate_ensemble_rdf(struct_ids=None, rdfs=None, energies=None, use_weight
     else:
         # Equal weights for all structures
         weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
-    
-    # Convert weights back to integer keys
-    int_weights = {int(k): v for k, v in weights.items()}
-    
+
     ensemble_rdf = None
     r_values = None
-    
+
     # Calculate average density (simplified)
     avg_number_density = 0.066  # Default for SiO2
-    
+
     # Calculate ensemble RDF with density normalization
     for struct_id, (r, rdf) in tqdm(rdfs.items(), desc="Calculating ensemble RDF"):
-        if struct_id not in int_weights:
+        if struct_id not in weights:
             continue
-        
-        weight = int_weights[struct_id]
+
+        weight = weights[struct_id]
         
         # Calculate the density normalization factor (nₐ/⟨n⟩)²
         number_density = 0.066  # Default for SiO2
@@ -366,23 +363,21 @@ def calculate_ensemble_partial_rdfs(struct_ids=None, rdfs=None, energies=None,
     else:
         # Equal weights for all structures
         weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
-    
-    int_weights = {int(k): v for k, v in weights.items()}
-    
+
     # Calculate ensemble average densities for normalization
     from src.data_management_v2 import calculate_ensemble_average_density
     avg_densities = calculate_ensemble_average_density(list(rdfs.keys()), energies, temperature)
-    
+
     # Initialize ensemble RDFs
     ensemble_rdfs = {pair: None for pair in element_pairs}
     r_values = None
-    
+
     # Calculate ensemble partial RDFs with proper density normalization
     for struct_id, struct_rdfs in tqdm(rdfs.items(), desc="Calculating ensemble partial RDFs"):
-        if struct_id not in int_weights or struct_id not in densities:
+        if struct_id not in weights or struct_id not in densities:
             continue
         
-        weight = int_weights[struct_id]
+        weight = weights[struct_id]
         density_data = densities[struct_id]
         
         # Initialize ensemble RDFs on first iteration
@@ -612,23 +607,21 @@ def calculate_ensemble_partial_counting_functions(struct_ids=None, counting_func
     else:
         # Equal weights for all structures
         weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
-    
-    int_weights = {int(k): v for k, v in weights.items()}
-    
+
     # Calculate ensemble average densities for normalization
     from src.data_management_v2 import calculate_ensemble_average_density
     avg_densities = calculate_ensemble_average_density(list(counting_functions.keys()), energies, temperature)
-    
+
     # Initialize ensemble counting functions
     ensemble_countings = {pair: None for pair in element_pairs}
     r_values = None
-    
+
     # Calculate ensemble averages with proper density normalization
     for struct_id, struct_cfs in tqdm(counting_functions.items(), desc="Calculating ensemble counting functions"):
-        if struct_id not in int_weights or struct_id not in densities:
+        if struct_id not in weights or struct_id not in densities:
             continue
         
-        weight = int_weights[struct_id]
+        weight = weights[struct_id]
         density_data = densities[struct_id]
         
         # Initialize ensemble counting functions on first iteration
