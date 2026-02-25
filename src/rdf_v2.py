@@ -1,10 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.constants import Boltzmann
 from tqdm import tqdm
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.neighborlist import NeighborList
-from src.data_management_v2 import load_energies, load_rdfs, load_counting_functions
+from src.data_management_v2 import (load_energies, load_rdfs, load_counting_functions,
+                                    load_structures, calculate_weights)
 
 
 # =====================================================================
@@ -174,53 +174,6 @@ def calculate_partial_rdfs(structure, r_range, bins, element_pairs=None, periodi
     
     return results
 
-# =====================================================================
-# WEIGHT CALCULATION
-# =====================================================================
-
-def calculate_weights(structures_dict, temperature):
-    """
-    Calculate Boltzmann weights based on energies in the structures dictionary.
-    
-    Parameters:
-    -----------
-    structures_dict : dict : Dictionary mapping structure IDs to structure-energy pairs
-    temperature : float : Temperature in Kelvin
-        
-    Returns:
-    --------
-    dict : Dictionary mapping structure IDs to weights
-    """
-    # Convert temperature to Ry (1 Ry = 13.605693009 eV)
-    kB_Ry = 6.33362e-6  # Ry/K
-    kT = kB_Ry * temperature
-    
-    # Extract energies
-    energies = {}
-    for struct_id, struct_data in structures_dict.items():
-        if "Energy (Ry)" in struct_data:
-            energies[struct_id] = struct_data["Energy (Ry)"]
-    
-    # Find the minimum energy
-    if not energies:
-        raise ValueError("No energy values found in structures dictionary")
-    
-    min_energy = min(energies.values())
-    
-    # Calculate unnormalized weights
-    weights = {}
-    for struct_id, energy in energies.items():
-        rel_energy = energy - min_energy
-        # Using the Boltzmann factor for energy in Ry units
-        # Note: The factor of 24 seems specific to your application - keeping it as is
-        weights[struct_id] = np.exp(-rel_energy / (24*kT))
-    
-    # Normalize weights
-    total_weight = sum(weights.values())
-    for struct_id in weights:
-        weights[struct_id] /= total_weight
-    
-    return weights
 
 # =====================================================================
 # ENSEMBLE AVERAGING FUNCTIONS
@@ -262,17 +215,13 @@ def calculate_ensemble_rdf(struct_ids=None, rdfs=None, energies=None, use_weight
             struct_ids = list(rdfs.keys())
         energies = load_energies(struct_ids)
     
-    # Create legacy format for weight calculation
-    legacy_dict = {}
-    for struct_id in rdfs.keys():
-        if struct_id in energies:
-            legacy_dict[str(struct_id)] = {"Energy (Ry)": energies[struct_id]}
-    
+    rdf_struct_ids = list(rdfs.keys())
     if use_weights:
-        weights = calculate_weights(legacy_dict, temperature)
+        structures = load_structures(rdf_struct_ids)
+        valid_ids = [sid for sid in rdf_struct_ids if sid in energies and sid in structures]
+        weights = calculate_weights(valid_ids, energies, structures, temperature)
     else:
-        # Equal weights for all structures
-        weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
+        weights = {sid: 1.0 / len(rdf_struct_ids) for sid in rdf_struct_ids}
 
     ensemble_rdf = None
     r_values = None
@@ -351,18 +300,13 @@ def calculate_ensemble_partial_rdfs(struct_ids=None, rdfs=None, energies=None,
         from src.data_management_v2 import load_densities
         densities = load_densities(struct_ids)
     
-    # Create legacy format for weight calculation
-    legacy_dict = {}
-    for struct_id in rdfs.keys():
-        if struct_id in energies:
-            legacy_dict[str(struct_id)] = {"Energy (Ry)": energies[struct_id]}
-    
-    # Calculate weights based on use_weights parameter
+    rdf_struct_ids = list(rdfs.keys())
     if use_weights:
-        weights = calculate_weights(legacy_dict, temperature)
+        structures = load_structures(rdf_struct_ids)
+        valid_ids = [sid for sid in rdf_struct_ids if sid in energies and sid in structures]
+        weights = calculate_weights(valid_ids, energies, structures, temperature)
     else:
-        # Equal weights for all structures
-        weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
+        weights = {sid: 1.0 / len(rdf_struct_ids) for sid in rdf_struct_ids}
 
     # Calculate ensemble average densities for normalization
     from src.data_management_v2 import calculate_ensemble_average_density
@@ -595,18 +539,13 @@ def calculate_ensemble_partial_counting_functions(struct_ids=None, counting_func
         from src.data_management_v2 import load_densities
         densities = load_densities(struct_ids)
     
-    # Create legacy format for weight calculation
-    legacy_dict = {}
-    for struct_id in counting_functions.keys():
-        if struct_id in energies:
-            legacy_dict[str(struct_id)] = {"Energy (Ry)": energies[struct_id]}
-    
+    cf_struct_ids = list(counting_functions.keys())
     # Calculate weights based on use_weights parameter
     if use_weights:
-        weights = calculate_weights(legacy_dict, temperature)
+        structures = load_structures(cf_struct_ids)
+        weights = calculate_weights(cf_struct_ids, energies, structures, temperature)
     else:
-        # Equal weights for all structures
-        weights = {str(k): 1.0/len(legacy_dict) for k in legacy_dict.keys()}
+        weights = {sid: 1.0 / len(cf_struct_ids) for sid in cf_struct_ids}
 
     # Calculate ensemble average densities for normalization
     from src.data_management_v2 import calculate_ensemble_average_density
@@ -1107,5 +1046,3 @@ def convert_counting_function_to_rdf(ensemble_countings, ensemble_densities=None
         ensemble_rdfs[pair] = (r_values, g_r)
     
     return ensemble_rdfs
-
-

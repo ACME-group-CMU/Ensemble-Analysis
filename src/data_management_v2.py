@@ -9,7 +9,7 @@ from tqdm import tqdm
 from src.rings import calculate_ensemble_ring_statistics, calculate_ring_statistics_for_structure
 
 BASE_DATA_DIR = 'data'
-POSCAR_DIR = f'{BASE_DATA_DIR}/vasps'
+POSCAR_DIR = f'{BASE_DATA_DIR}/all_sizes'
 ENERGY_DIR = f'{BASE_DATA_DIR}/energies'
 RDF_DIR = f'{BASE_DATA_DIR}/rdfs'
 CF_DIR = f'{BASE_DATA_DIR}/counting_functions'
@@ -66,6 +66,59 @@ def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
     structure = adaptor.get_structure(atoms)
     
     return structure, energy
+
+
+# =====================================================================
+# BOLTZMANN WEIGHTING
+# =====================================================================
+
+def calculate_weights(struct_ids, energies, structures, temperature):
+    """
+    Calculate Boltzmann weights for an ensemble of structures.
+
+    Energies are normalized per atom before computing the Boltzmann factor,
+    ensuring structures of different sizes are weighted correctly.
+
+    Parameters:
+    -----------
+    struct_ids : list of str
+        Structure IDs to calculate weights for
+    energies : dict
+        {struct_id: energy (Ry)}
+    structures : dict
+        {struct_id: pymatgen Structure} — used to get n_atoms per structure
+    temperature : float
+        Temperature in Kelvin
+
+    Returns:
+    --------
+    dict : {struct_id: normalized weight}
+    """
+    kB_Ry = 6.33362e-6  # Boltzmann constant in Ry/K
+    kT = kB_Ry * temperature
+
+    # Compute per-atom energies
+    per_atom_energies = {}
+    for struct_id in struct_ids:
+        if struct_id in energies and struct_id in structures:
+            n_atoms = len(structures[struct_id])
+            per_atom_energies[struct_id] = energies[struct_id] / n_atoms
+
+    if not per_atom_energies:
+        raise ValueError("No valid energy/structure pairs found for weight calculation.")
+
+    min_energy = min(per_atom_energies.values())
+
+    # Unnormalized Boltzmann weights
+    weights = {
+        struct_id: np.exp(-(e - min_energy) / kT)
+        for struct_id, e in per_atom_energies.items()
+    }
+
+    # Normalize
+    total = sum(weights.values())
+    return {struct_id: w / total for struct_id, w in weights.items()}
+
 
 # =====================================================================
 # POPULATION FUNCTIONS (Create and save data)
@@ -925,6 +978,7 @@ def load_ring_statistics(struct_ids):
     
     return ring_stats
 
+
 # =====================================================================
 # UTILITY FUNCTIONS
 # =====================================================================
@@ -946,22 +1000,13 @@ def calculate_ensemble_average_density(struct_ids, energies=None, temperature=18
     --------
     dict : Dictionary with average densities
     """
-    # Load densities and energies
     densities = load_densities(struct_ids)
     if energies is None:
         energies = load_energies(struct_ids)
-    
-    # Create legacy format for weight calculation
-    legacy_dict = {}
-    for struct_id in struct_ids:
-        if struct_id in energies:
-            legacy_dict[struct_id] = {"Energy (Ry)": energies[struct_id]}
+    structures = load_structures(struct_ids)
 
-    # Import here to avoid circular imports
-    from src.rdf_v2 import calculate_weights
-    weights = calculate_weights(legacy_dict, temperature)
+    weights = calculate_weights(struct_ids, energies, structures, temperature)
     
-    # Calculate weighted averages
     avg_total_density = 0
     avg_partial_densities = {}
 
@@ -970,10 +1015,8 @@ def calculate_ensemble_average_density(struct_ids, energies=None, temperature=18
             weight = weights[struct_id]
             density_data = densities[struct_id]
             
-            # Add to total density average
             avg_total_density += weight * density_data['total_density']
             
-            # Add to partial density averages
             for elem, partial_density in density_data['partial_densities'].items():
                 if elem not in avg_partial_densities:
                     avg_partial_densities[elem] = 0
@@ -1053,88 +1096,151 @@ def check_data_availability(struct_ids, data_types=None):
     
     return availability
 
-def calculate_ensemble_qn(struct_ids):
+def calculate_ensemble_qn(struct_ids, use_weights=False, temperature=1800):
     """
-    Calculate ensemble-averaged Qn distribution with uniform weights
+    Calculate ensemble-averaged Qn distribution.
 
     Parameters:
     -----------
     struct_ids : list of str
         Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+    use_weights : bool
+        If True, apply Boltzmann weighting (default: False)
+    temperature : float
+        Temperature in Kelvin for Boltzmann weighting
 
     Returns:
     --------
     dict : {'qn_fractions': {0: frac, 1: frac, ...}}
     """
-    # Load data
     qn_data = load_qn_distributions(struct_ids)
-    
-    # Equal weights
-    weight = 1.0 / len(struct_ids)
-    
-    # Ensemble average
+
+    if use_weights:
+        energies = load_energies(struct_ids)
+        structures = load_structures(struct_ids)
+        weights = calculate_weights(struct_ids, energies, structures, temperature)
+    else:
+        weights = {sid: 1.0 / len(struct_ids) for sid in struct_ids}
+
     ensemble_qn = {n: 0.0 for n in range(5)}
-    
+
     for struct_id in struct_ids:
-        if struct_id in qn_data:
+        if struct_id in qn_data and struct_id in weights:
             qn_fracs = qn_data[struct_id]['qn_fractions']
-            
+            w = weights[struct_id]
             for n in range(5):
-                ensemble_qn[n] += weight * qn_fracs.get(n, 0)
-    
-    # Normalize to ensure sum = 1
+                ensemble_qn[n] += w * qn_fracs.get(n, 0)
+
     total = sum(ensemble_qn.values())
     if total > 0:
-        ensemble_qn = {n: frac/total for n, frac in ensemble_qn.items()}
-    
+        ensemble_qn = {n: frac / total for n, frac in ensemble_qn.items()}
+
     return {'qn_fractions': ensemble_qn}
 
-def calculate_ensemble_bad(struct_ids, bins=60):
+def calculate_ensemble_bad(struct_ids, bins=60, use_weights=False, temperature=1800):
     """
-    Calculate ensemble-averaged bond angle distribution with uniform weights
+    Calculate ensemble-averaged bond angle distribution.
 
     Parameters:
     -----------
     struct_ids : list of str
         Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     bins : int
-        Number of bins for histogram (default: 60 for smoother plot)
+        Number of bins for histogram (default: 60)
+    use_weights : bool
+        If True, apply Boltzmann weighting (default: False)
+    temperature : float
+        Temperature in Kelvin for Boltzmann weighting
 
     Returns:
     --------
     dict : {'bin_centers': array, 'histogram': array, 'mean': float, 'std': float}
     """
-    # Load data
     bad_data = load_bond_angle_distributions(struct_ids)
-    
-    # Pool all angles with equal weights
-    all_angles = []
-    
-    for struct_id in struct_ids:
-        if struct_id in bad_data:
-            angles = bad_data[struct_id]['angles']
-            all_angles.extend(angles)
-    
-    all_angles = np.array(all_angles)
-    
-    # Calculate statistics
-    mean_angle = np.mean(all_angles)
-    std_angle = np.std(all_angles)
-    
-    # Create histogram
-    hist, bin_edges = np.histogram(all_angles, bins=bins, range=(60, 180))
+
+    if use_weights:
+        energies = load_energies(struct_ids)
+        structures = load_structures(struct_ids)
+        weights = calculate_weights(struct_ids, energies, structures, temperature)
+    else:
+        weights = {sid: 1.0 / len(struct_ids) for sid in struct_ids}
+
+    # Weighted histogram: accumulate weighted angle counts
+    angle_range = (60, 180)
+    bin_edges = np.linspace(angle_range[0], angle_range[1], bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    
-    # Normalize to probability density
-    hist_normalized = hist / (np.sum(hist) * (bin_edges[1] - bin_edges[0]))
-    
+    weighted_hist = np.zeros(bins)
+    weighted_mean = 0.0
+    weighted_sq = 0.0
+    total_weight = 0.0
+
+    for struct_id in struct_ids:
+        if struct_id in bad_data and struct_id in weights:
+            angles = np.array(bad_data[struct_id]['angles'])
+            w = weights[struct_id]
+            hist, _ = np.histogram(angles, bins=bin_edges)
+            weighted_hist += w * hist
+            weighted_mean += w * np.mean(angles)
+            weighted_sq += w * np.mean(angles ** 2)
+            total_weight += w
+
+    # Normalize histogram to probability density
+    bin_width = bin_edges[1] - bin_edges[0]
+    hist_sum = np.sum(weighted_hist)
+    if hist_sum > 0:
+        weighted_hist = weighted_hist / (hist_sum * bin_width)
+
+    weighted_std = np.sqrt(max(weighted_sq - weighted_mean ** 2, 0))
+
     return {
         'bin_centers': bin_centers,
-        'histogram': hist_normalized,
-        'mean': mean_angle,
-        'std': std_angle
+        'histogram': weighted_hist,
+        'mean': weighted_mean,
+        'std': weighted_std
     }
-    
+
+def calculate_ensemble_rings(struct_ids, max_ring_size=20, use_weights=False, temperature=1800):
+    """
+    Calculate ensemble-averaged ring statistics (RN and RC).
+
+    Parameters:
+    -----------
+    struct_ids : list of str
+        Structure IDs (e.g., ['SiO2_36_481', 'SiO2_24_2'])
+    max_ring_size : int
+        Maximum ring size to include (default: 20)
+    use_weights : bool
+        If True, apply Boltzmann weighting (default: False)
+    temperature : float
+        Temperature in Kelvin for Boltzmann weighting
+
+    Returns:
+    --------
+    dict : {'RN': {size: avg}, 'RC': {size: avg}}
+    """
+    ring_data = load_ring_statistics(struct_ids)
+
+    if use_weights:
+        energies = load_energies(struct_ids)
+        structures = load_structures(struct_ids)
+        weights = calculate_weights(struct_ids, energies, structures, temperature)
+    else:
+        weights = {sid: 1.0 / len(struct_ids) for sid in struct_ids}
+
+    ring_sizes = range(2, max_ring_size + 1)
+    avg_rn = {s: 0.0 for s in ring_sizes}
+    avg_rc = {s: 0.0 for s in ring_sizes}
+
+    for struct_id in struct_ids:
+        if struct_id in ring_data and struct_id in weights:
+            w = weights[struct_id]
+            stats = ring_data[struct_id]
+            for s in ring_sizes:
+                avg_rn[s] += w * stats['RN'].get(s, 0.0)
+                avg_rc[s] += w * stats['RC'].get(s, 0.0)
+
+    return {'RN': avg_rn, 'RC': avg_rc}
+
 def check_ring_data_availability(struct_ids):
     """
     Check which structures have ring statistics computed.
