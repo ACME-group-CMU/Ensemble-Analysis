@@ -18,6 +18,8 @@ SMOOTH_RDF_DIR = f'{BASE_DATA_DIR}/smooth_rdfs'
 QN_DIR = f'{BASE_DATA_DIR}/qn_distributions'
 BAD_DIR = f'{BASE_DATA_DIR}/bond_angle_distributions'
 RING_DIR = f'{BASE_DATA_DIR}/ring_statistics'
+SQ_DIR      = f'{BASE_DATA_DIR}/sq'           # raw S(q) per structure
+RDF_SQ_DIR  = f'{BASE_DATA_DIR}/rdfs_from_sq' # FT-derived g(r) / D(r) per structure
 
 # Standard parameters
 STANDARD_PARAMS = {
@@ -29,7 +31,7 @@ STANDARD_PARAMS = {
 
 def ensure_directories():
     """Create data directories if they don't exist"""
-    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR, QN_DIR, BAD_DIR, RING_DIR]:
+    for directory in [ENERGY_DIR, RDF_DIR, CF_DIR, STRUCT_DIR, QN_DIR, BAD_DIR, RING_DIR, SMOOTH_RDF_DIR, SQ_DIR, RDF_SQ_DIR]:
         os.makedirs(directory, exist_ok=True)
 
 def vasp_to_pymatgen(struct_id, folder_path=POSCAR_DIR):
@@ -711,6 +713,137 @@ def populate_ring_statistics(struct_ids, folder_path=POSCAR_DIR, cutoffs=None, m
     if failed:
         print(f"\nFailed to process the following structures: {failed}")
 
+def populate_sq(struct_ids, folder_path='data/all_sizes',
+                q_range=(0.5, 20.0), n_q=500,
+                weighting='xray',
+                mode='both',
+                temperature=1800):
+    from src.rdf_v2 import calculate_sq
+    ensure_directories()
+
+    params = {
+        'q_range': q_range,
+        'n_q': n_q,
+        'weighting': weighting,
+        'temperature': temperature,
+    }
+
+    for struct_id in tqdm(struct_ids, desc="Populating S(q)"):
+        try:
+            structure, energy = vasp_to_pymatgen(struct_id, folder_path)
+            sq_result = calculate_sq(structure, q_range=q_range,
+                                     n_q=n_q, weighting=weighting)
+
+            if mode in ('total', 'both'):
+                data = {
+                    'params': params,
+                    'data': {
+                        'q': sq_result['q'],
+                        'S_total': sq_result['S_total'],
+                        'weighting': weighting,
+                        'concentrations': sq_result['concentrations'],
+                        'q_range': q_range,
+                        'partial_densities_abs': sq_result['partial_densities_abs'],  # FIXED
+                    }
+                }
+                path = os.path.join(SQ_DIR, f'{struct_id}_total_sq.pkl')
+                with open(path, 'wb') as f:
+                    pickle.dump(data, f)
+
+            if mode in ('partial', 'both'):
+                for pair, S_ab in sq_result['partials'].items():
+                    pair_name = f"{pair[0]}_{pair[1]}"
+                    data = {
+                        'params': params,
+                        'data': {
+                            'q': sq_result['q'],
+                            'S_total': S_ab,
+                            'weighting': 'unweighted_partial',
+                            'concentrations': sq_result['concentrations'],
+                            'q_range': q_range,
+                            'partial_densities_abs': sq_result['partial_densities_abs'],  # FIXED
+                        }
+                    }
+                    path = os.path.join(SQ_DIR, f'{struct_id}_{pair_name}_sq.pkl')
+                    with open(path, 'wb') as f:
+                        pickle.dump(data, f)
+
+        except Exception as e:
+            print(f"Error computing S(q) for {struct_id}: {e}")
+
+
+def populate_gr_from_sq(struct_ids, folder_path='data/all_sizes',
+                         q_range=(0.5, 20.0), n_q=500,
+                         r_range=(0.5, 10.0), n_r=500,
+                         weighting='xray',
+                         use_lorch=True,
+                         mode='both',
+                         temperature=1800):
+    from src.rdf_v2 import calculate_sq, calculate_gr_from_sq
+    ensure_directories()
+
+    params = {
+        'q_range': q_range,
+        'r_range': r_range,
+        'n_q': n_q,
+        'n_r': n_r,
+        'weighting': weighting,
+        'use_lorch': use_lorch,
+        'temperature': temperature,
+    }
+
+    for struct_id in tqdm(struct_ids, desc="Populating FT g(r) from S(q)"):
+        try:
+            structure, energy = vasp_to_pymatgen(struct_id, folder_path)
+
+            volume = structure.volume
+            n_atoms = len(structure)
+            density = n_atoms / volume
+
+            sq_result = calculate_sq(structure, q_range=q_range,
+                                     n_q=n_q, weighting=weighting)
+
+            gr_result = calculate_gr_from_sq(sq_result, r_range=r_range,
+                                              n_r=n_r, use_lorch=use_lorch,
+                                              density=density)
+
+            if mode in ('total', 'both'):
+                data = {
+                    'params': params,
+                    'data': {
+                        'r': gr_result['r'],
+                        'D_r': gr_result['D_r'],
+                        'g_r': gr_result['g_r'],
+                        'use_lorch': use_lorch,
+                        'weighting': weighting,
+                        'density': density,  # ADDED for reference
+                    }
+                }
+                path = os.path.join(RDF_SQ_DIR, f'{struct_id}_total_rdf_sq.pkl')
+                with open(path, 'wb') as f:
+                    pickle.dump(data, f)
+
+            if mode in ('partial', 'both'):
+                for pair in gr_result['D_partials']:
+                    pair_name = f"{pair[0]}_{pair[1]}"
+                    data = {
+                        'params': params,
+                        'data': {
+                            'r': gr_result['r'],
+                            'D_r': gr_result['D_partials'][pair],
+                            'g_r': gr_result['g_partials'][pair] if gr_result['g_partials'] else None,
+                            'use_lorch': use_lorch,
+                            'weighting': weighting,
+                            'density': density,  # ADDED for reference
+                        }
+                    }
+                    path = os.path.join(RDF_SQ_DIR, f'{struct_id}_{pair_name}_rdf_sq.pkl')
+                    with open(path, 'wb') as f:
+                        pickle.dump(data, f)
+
+        except Exception as e:
+            print(f"Error computing FT g(r) for {struct_id}: {e}")
+
 # =====================================================================
 # LOADING FUNCTIONS (Read data from disk)
 # =====================================================================
@@ -988,6 +1121,99 @@ def load_ring_statistics(struct_ids):
     
     return ring_stats
 
+def load_sq(struct_ids, pairs='total'):
+    """
+    Load S(q) data. Always returns {struct_id: {'q', 'S_total', 'partials', ...}}
+    matching the calculate_sq() output format.
+    
+    pairs : 'total' | 'all' | list of str e.g. ['Si_O', 'Si_Si']
+    """
+    if pairs == 'total':
+        partial_patterns = []
+    elif pairs == 'all':
+        partial_patterns = ['Si_Si_sq', 'Si_O_sq', 'O_O_sq']
+    else:
+        partial_patterns = [f'{p}_sq' for p in pairs]
+
+    results = {}
+    for struct_id in struct_ids:
+        # Load total
+        path = os.path.join(SQ_DIR, f'{struct_id}_total_sq.pkl')
+        try:
+            with open(path, 'rb') as f:
+                saved = pickle.load(f)
+            entry = saved['data'].copy()  # has 'q', 'S_total', 'weighting', etc.
+            entry['partials'] = {}
+        except FileNotFoundError:
+            print(f"Warning: S(q) file not found: {struct_id}_total_sq.pkl")
+            continue
+        except Exception as e:
+            print(f"Error loading S(q) {struct_id}: {e}")
+            continue
+
+        # Load partials
+        for pattern in partial_patterns:
+            path = os.path.join(SQ_DIR, f'{struct_id}_{pattern}.pkl')
+            try:
+                with open(path, 'rb') as f:
+                    saved = pickle.load(f)
+                pair_str = pattern.replace('_sq', '')
+                e1, e2 = pair_str.split('_')
+                entry['partials'][(e1, e2)] = saved['data']['S_total']
+            except FileNotFoundError:
+                print(f"Warning: partial S(q) not found: {struct_id}_{pattern}.pkl")
+            except Exception as e:
+                print(f"Error loading partial S(q) {struct_id}_{pattern}: {e}")
+
+        results[struct_id] = entry
+    return results
+
+
+def load_gr_from_sq(struct_ids, pairs='total'):
+    """
+    Load FT g(r) data. Always returns {struct_id: {'r', 'D_r', 'g_r', 'D_partials', 'g_partials', ...}}
+    matching the calculate_gr_from_sq() output format.
+    """
+    if pairs == 'total':
+        partial_patterns = []
+    elif pairs == 'all':
+        partial_patterns = ['Si_Si_rdf_sq', 'Si_O_rdf_sq', 'O_O_rdf_sq']
+    else:
+        partial_patterns = [f'{p}_rdf_sq' for p in pairs]
+
+    results = {}
+    for struct_id in struct_ids:
+        path = os.path.join(RDF_SQ_DIR, f'{struct_id}_total_rdf_sq.pkl')
+        try:
+            with open(path, 'rb') as f:
+                saved = pickle.load(f)
+            entry = saved['data'].copy()  # has 'r', 'D_r', 'g_r', 'use_lorch', 'weighting'
+            entry['D_partials'] = {}
+            entry['g_partials'] = {}
+        except FileNotFoundError:
+            print(f"Warning: FT g(r) file not found: {struct_id}_total_rdf_sq.pkl")
+            continue
+        except Exception as e:
+            print(f"Error loading FT g(r) {struct_id}: {e}")
+            continue
+
+        for pattern in partial_patterns:
+            path = os.path.join(RDF_SQ_DIR, f'{struct_id}_{pattern}.pkl')
+            try:
+                with open(path, 'rb') as f:
+                    saved = pickle.load(f)
+                pair_str = pattern.replace('_rdf_sq', '')
+                e1, e2 = pair_str.split('_')
+                entry['D_partials'][(e1, e2)] = saved['data']['D_r']
+                entry['g_partials'][(e1, e2)] = saved['data']['g_r']
+            except FileNotFoundError:
+                print(f"Warning: partial FT g(r) not found: {struct_id}_{pattern}.pkl")
+            except Exception as e:
+                print(f"Error loading partial FT g(r) {struct_id}_{pattern}: {e}")
+
+        results[struct_id] = entry
+    return results
+
 
 # =====================================================================
 # UTILITY FUNCTIONS
@@ -1037,18 +1263,18 @@ def calculate_ensemble_average_density(struct_ids, energies=None, temperature=18
         'partial_densities': avg_partial_densities
     }
 
-def populate_all_data(struct_ids, folder_path=POSCAR_DIR, **kwargs):
+def populate_all_data(struct_ids, folder_path='data/all_sizes',
+                      include_sq=True, weighting='xray', **kwargs):
     """
-    Convenience function to populate all data types for given structure IDs
+    Convenience function to populate all data types.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     struct_ids : list of str
-        Structure IDs to process (e.g., ['SiO2_36_481', 'SiO2_24_2'])
     folder_path : str
-        Path to POSCAR files
-    **kwargs : dict
-        Additional parameters for calculations
+    include_sq : bool  also populate S(q) and FT g(r) (default True)
+    weighting : str  for S(q) ('xray' | 'neutron' | 'unweighted')
+    **kwargs : passed to individual populate functions
     """
     print("Populating all data types...")
     populate_energies(struct_ids, folder_path)
@@ -1058,52 +1284,71 @@ def populate_all_data(struct_ids, folder_path=POSCAR_DIR, **kwargs):
     populate_counting_functions(struct_ids, folder_path, **kwargs)
     populate_qn_distributions(struct_ids, folder_path)
     populate_bond_angle_distributions(struct_ids, folder_path, **kwargs)
+    if include_sq:
+        print("Populating S(q)...")
+        populate_sq(struct_ids, folder_path, weighting=weighting)
+        print("Populating FT g(r) from S(q)...")
+        populate_gr_from_sq(struct_ids, folder_path, weighting=weighting)
     print("All data populated successfully!")
 
 def check_data_availability(struct_ids, data_types=None):
     """
-    Check which data files exist for given structure IDs
+    Check which data files exist for given structure IDs.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     struct_ids : list of str
-        Structure IDs to check (e.g., ['SiO2_36_481', 'SiO2_24_2'])
-    data_types : list of str
-        Data types to check ['energies', 'structures', 'rdfs', 'cfs']
-        If None, checks all types
-
-    Returns:
-    --------
-    dict : Summary of available data
+    data_types : list of str or None
+        Options: 'energies', 'structures', 'rdfs', 'cfs', 'sq', 'gr_sq'
     """
     if data_types is None:
-        data_types = ['energies', 'structures', 'rdfs', 'cfs']
-    
+        data_types = ['energies', 'structures', 'rdfs', 'cfs', 'sq', 'gr_sq']
+
     availability = {}
-    
     for struct_id in struct_ids:
         availability[struct_id] = {}
-        
+
         if 'energies' in data_types:
-            energy_file = os.path.join(ENERGY_DIR, f'{struct_id}_energy.pkl')
-            availability[struct_id]['energy'] = os.path.exists(energy_file)
-            
+            availability[struct_id]['energy'] = os.path.exists(
+                os.path.join('data/energies', f'{struct_id}_energy.pkl'))
+
         if 'structures' in data_types:
-            struct_file = os.path.join(STRUCT_DIR, f'{struct_id}_struct.pkl')
-            availability[struct_id]['structure'] = os.path.exists(struct_file)
-            
+            availability[struct_id]['structure'] = os.path.exists(
+                os.path.join('data/structures', f'{struct_id}_struct.pkl'))
+
         if 'rdfs' in data_types:
-            rdf_files = [f'{struct_id}_total_rdf.pkl', f'{struct_id}_Si_Si_rdf.pkl', 
-                        f'{struct_id}_Si_O_rdf.pkl', f'{struct_id}_O_O_rdf.pkl']
-            rdf_exists = [os.path.exists(os.path.join(RDF_DIR, f)) for f in rdf_files]
-            availability[struct_id]['rdfs'] = sum(rdf_exists)
-            
+            rdf_files = [f'{struct_id}_total_rdf.pkl',
+                         f'{struct_id}_Si_Si_rdf.pkl',
+                         f'{struct_id}_Si_O_rdf.pkl',
+                         f'{struct_id}_O_O_rdf.pkl']
+            availability[struct_id]['rdfs'] = sum(
+                os.path.exists(os.path.join('data/rdfs', f)) for f in rdf_files)
+
         if 'cfs' in data_types:
-            cf_files = [f'{struct_id}_Si_Si_cf.pkl', f'{struct_id}_Si_O_cf.pkl', 
-                       f'{struct_id}_O_O_cf.pkl']
-            cf_exists = [os.path.exists(os.path.join(CF_DIR, f)) for f in cf_files]
-            availability[struct_id]['cfs'] = sum(cf_exists)
-    
+            cf_files = [f'{struct_id}_Si_Si_cf.pkl',
+                        f'{struct_id}_Si_O_cf.pkl',
+                        f'{struct_id}_O_O_cf.pkl']
+            availability[struct_id]['cfs'] = sum(
+                os.path.exists(os.path.join('data/counting_functions', f))
+                for f in cf_files)
+
+        if 'sq' in data_types:
+            sq_files = [f'{struct_id}_total_sq.pkl',
+                        f'{struct_id}_Si_Si_sq.pkl',
+                        f'{struct_id}_Si_O_sq.pkl',
+                        f'{struct_id}_O_O_sq.pkl']
+            availability[struct_id]['sq'] = sum(
+                os.path.exists(os.path.join(SQ_DIR, f)) for f in sq_files)
+
+        if 'gr_sq' in data_types:
+            gr_sq_files = [f'{struct_id}_total_rdf_sq.pkl',
+                           f'{struct_id}_Si_Si_rdf_sq.pkl',
+                           f'{struct_id}_Si_O_rdf_sq.pkl',
+                           f'{struct_id}_O_O_rdf_sq.pkl']
+            availability[struct_id]['gr_sq'] = sum(
+                os.path.exists(os.path.join(RDF_SQ_DIR, f))
+                for f in gr_sq_files)
+
     return availability
 
 def calculate_ensemble_qn(struct_ids, use_weights=False, temperature=1800):

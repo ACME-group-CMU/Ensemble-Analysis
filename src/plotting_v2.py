@@ -343,3 +343,435 @@ def plot_all_metrics(*struct_id_lists, labels=None, use_weights=False,
         'bad': bad_results,
         'rings': ring_results
     }
+
+def plot_sq(*data_items, labels=None, temperature=1800, use_weights=False,
+            weighting='xray', figsize=(8, 5), save_path=None,
+            plot_reduced=True, show_partials=False):
+    """
+    Plot ensemble-averaged S(q) or q(S(q)-1) from multiple datasets.
+
+    Parameters
+    ----------
+    *data_items : list of struct_ids  OR  pre-calculated ensemble sq dicts
+        Pre-calculated dicts should have keys 'q', 'S_total', and optionally 'partials'.
+    labels : list of str
+    temperature : float
+    use_weights : bool
+    weighting : str  'xray' | 'neutron' | 'unweighted'  (for ID-based calculation)
+    figsize : tuple
+    save_path : str or None
+    plot_reduced : bool
+        If True (default), plot q(S(q)-1) — more informative at large q (Wolf et al. style)
+        If False, plot raw S(q)
+    show_partials : bool
+        If True, also plot partial S_αβ(q) in subplots below total
+
+    Returns
+    -------
+    list of ensemble sq dicts
+    """
+    from src.rdf_v2 import calculate_ensemble_sq
+    from src.data_management_v2 import load_sq
+
+    if not data_items:
+        raise ValueError("At least one data item required")
+
+    all_sq_results = []
+
+    for i, item in enumerate(data_items):
+        label = labels[i] if labels and i < len(labels) else f"Dataset {i+1}"
+
+        if isinstance(item, (list, np.ndarray)):
+            sq_raw = load_sq(list(item), pairs='all')
+            # Rebuild into format expected by calculate_ensemble_sq
+            # convert flat load to full sq_data structure
+            sq_data_full = {}
+            for sid, d in sq_raw.items():
+                if isinstance(d, dict) and 'total' in d:
+                    entry = d['total'].copy()
+                    entry['partials'] = {
+                        tuple(k.split('_')): v['S_total']
+                        for k, v in d.items() if k != 'total'
+                    }
+                    sq_data_full[sid] = entry
+                else:
+                    sq_data_full[sid] = d
+
+            ensemble = calculate_ensemble_sq(
+                list(item), sq_data=sq_data_full,
+                use_weights=use_weights, temperature=temperature
+            )
+        elif isinstance(item, dict) and 'q' in item:
+            ensemble = item
+        else:
+            print(f"Warning: unrecognised type at index {i}, skipping")
+            continue
+
+        ensemble['_label'] = label
+        all_sq_results.append(ensemble)
+
+    if not all_sq_results:
+        return all_sq_results
+
+    n_pairs = len(all_sq_results[0].get('partials', {}))
+    n_subplots = 1 + (n_pairs if show_partials else 0)
+
+    fig, axes = plt.subplots(n_subplots, 1, figsize=figsize)
+    if n_subplots == 1:
+        axes = [axes]
+
+    y_label = 'q(S(q) − 1)  [1/Å]' if plot_reduced else 'S(q)'
+    weight_label = {'xray': 'X-ray', 'neutron': 'Neutron',
+                    'unweighted': 'Unweighted'}.get(weighting, weighting)
+
+    # Total S(q)
+    ax = axes[0]
+    for res in all_sq_results:
+        q = res['q']
+        S = res['S_total']
+        y = q * (S - 1) if plot_reduced else S
+        ax.plot(q, y, label=res['_label'], linewidth=1.5)
+
+    ax.axhline(0, color='k', linewidth=0.5, linestyle='--')
+    ax.set_xlabel('q  [1/Å]')
+    ax.set_ylabel(y_label)
+    ax.set_title(f'Total Structure Factor — {weight_label}')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Partial S(q)
+    if show_partials and n_pairs > 0:
+        pairs = list(all_sq_results[0]['partials'].keys())
+        for j, pair in enumerate(pairs):
+            ax = axes[j + 1]
+            for res in all_sq_results:
+                q = res['q']
+                S_ab = res['partials'].get(pair, np.ones_like(q))
+                y = q * (S_ab - 1) if plot_reduced else S_ab
+                ax.plot(q, y, label=res['_label'], linewidth=1.5)
+            ax.axhline(0, color='k', linewidth=0.5, linestyle='--')
+            ax.set_xlabel('q  [1/Å]')
+            ax.set_ylabel(y_label)
+            ax.set_title(f'{pair[0]}-{pair[1]} Partial S(q)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Figure saved to {save_path}")
+    plt.show()
+    return all_sq_results
+
+
+# =====================================================================
+# FT g(r) / D(r) PLOTTING
+# =====================================================================
+
+def plot_gr_from_sq(*data_items, labels=None, temperature=1800, use_weights=False,
+                    plot_Dr=True, show_partials=False,
+                    figsize=(8, 5), save_path=None):
+    """
+    Plot ensemble-averaged D(r) or g(r) derived from S(q) via Fourier transform.
+
+    Parameters
+    ----------
+    *data_items : list of struct_ids  OR  pre-calculated ensemble gr_from_sq dicts
+    labels : list of str
+    temperature : float
+    use_weights : bool
+    plot_Dr : bool
+        If True (default), plot reduced PDF D(r)
+        If False, plot g(r)
+    show_partials : bool
+    figsize : tuple
+    save_path : str or None
+
+    Returns
+    -------
+    list of ensemble gr_from_sq dicts
+    """
+    from src.rdf_v2 import calculate_ensemble_gr_from_sq
+    from src.data_management_v2 import load_gr_from_sq
+
+    if not data_items:
+        raise ValueError("At least one data item required")
+
+    all_results = []
+
+    for i, item in enumerate(data_items):
+        label = labels[i] if labels and i < len(labels) else f"Dataset {i+1}"
+
+        if isinstance(item, (list, np.ndarray)):
+            gr_sq_raw = load_gr_from_sq(list(item), pairs='all')
+            # Reformat for ensemble averaging
+            gr_sq_data = {}
+            for sid, d in gr_sq_raw.items():
+                if isinstance(d, dict) and 'total' in d:
+                    entry = d['total'].copy()
+                    entry['D_partials'] = {
+                        tuple(k.split('_')): v['D_r']
+                        for k, v in d.items() if k != 'total'
+                    }
+                    entry['g_partials'] = {
+                        tuple(k.split('_')): v['g_r']
+                        for k, v in d.items() if k != 'total' and v.get('g_r') is not None
+                    }
+                    gr_sq_data[sid] = entry
+                else:
+                    gr_sq_data[sid] = d
+
+            ensemble = calculate_ensemble_gr_from_sq(
+                list(item), gr_sq_data=gr_sq_data,
+                use_weights=use_weights, temperature=temperature
+            )
+        elif isinstance(item, dict) and 'r' in item:
+            ensemble = item
+        else:
+            print(f"Warning: unrecognised type at index {i}, skipping")
+            continue
+
+        ensemble['_label'] = label
+        all_results.append(ensemble)
+
+    if not all_results:
+        return all_results
+
+    n_pairs = len(all_results[0].get('D_partials', {}))
+    n_subplots = 1 + (n_pairs if show_partials else 0)
+    fig, axes = plt.subplots(n_subplots, 1, figsize=figsize)
+    if n_subplots == 1:
+        axes = [axes]
+
+    y_key = 'D_r' if plot_Dr else 'g_r'
+    y_label = 'D(r)  [1/Å²]' if plot_Dr else 'g(r)'
+    lorch_note = ' (Lorch)' if all_results[0].get('use_lorch', True) else ''
+    weight_label = {'xray': 'X-ray', 'neutron': 'Neutron',
+                    'unweighted': 'Unweighted'}.get(
+        all_results[0].get('weighting', ''), '')
+
+    ax = axes[0]
+    for res in all_results:
+        r = res['r']
+        y = res.get(y_key)
+        if y is None:
+            print(f"Warning: {y_key} not available for {res['_label']}, skipping")
+            continue
+        ax.plot(r, y, label=res['_label'], linewidth=1.5)
+
+    ax.set_xlabel('r  [Å]')
+    ax.set_ylabel(y_label)
+    ax.set_title(f'Total {y_label} from S(q){lorch_note} — {weight_label}')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    if show_partials:
+        pairs = list(all_results[0]['D_partials'].keys())
+        partial_key = 'D_partials' if plot_Dr else 'g_partials'
+        for j, pair in enumerate(pairs):
+            ax = axes[j + 1]
+            for res in all_results:
+                r = res['r']
+                partials = res.get(partial_key, {})
+                y = partials.get(pair)
+                if y is None:
+                    continue
+                ax.plot(r, y, label=res['_label'], linewidth=1.5)
+            ax.set_xlabel('r  [Å]')
+            ax.set_ylabel(y_label)
+            ax.set_title(f'{pair[0]}-{pair[1]} {y_label} from S(q){lorch_note}')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Figure saved to {save_path}")
+    plt.show()
+    return all_results
+
+
+# =====================================================================
+# WOLF-STYLE SIDE-BY-SIDE PLOT: q(S(q)-1) | D(r)
+# =====================================================================
+
+def plot_sq_vs_gr(*data_items, labels=None, temperature=1800, use_weights=False,
+                  weighting='xray', figsize=(12, 5), save_path=None):
+    """
+    Side-by-side plot of q(S(q)-1) and D(r), mirroring Wolf et al. Fig. 2.
+
+    Left panel:  q(S(q) − 1) vs q
+    Right panel: D(r) vs r
+
+    Parameters
+    ----------
+    *data_items : list of struct_ids  OR  tuple of (sq_dict, gr_sq_dict)
+    labels : list of str
+    temperature : float
+    use_weights : bool
+    weighting : str  'xray' | 'neutron' | 'unweighted'
+    figsize : tuple
+    save_path : str or None
+    """
+    from src.rdf_v2 import calculate_ensemble_sq, calculate_ensemble_gr_from_sq
+    from src.data_management_v2 import load_sq, load_gr_from_sq
+
+    if not data_items:
+        raise ValueError("At least one data item required")
+
+    weight_label = {'xray': 'X-ray', 'neutron': 'Neutron',
+                    'unweighted': 'Unweighted'}.get(weighting, weighting)
+
+    fig, (ax_sq, ax_gr) = plt.subplots(1, 2, figsize=figsize)
+
+    for i, item in enumerate(data_items):
+        label = labels[i] if labels and i < len(labels) else f"Dataset {i+1}"
+
+        if isinstance(item, (list, np.ndarray)):
+            struct_ids = list(item)
+            sq_raw = load_sq(struct_ids, pairs='total')
+            gr_raw = load_gr_from_sq(struct_ids, pairs='total')
+
+            # Quick ensemble average
+            valid_sq = [sid for sid in struct_ids if sid in sq_raw]
+            valid_gr = [sid for sid in struct_ids if sid in gr_raw]
+            n_sq = len(valid_sq)
+            n_gr = len(valid_gr)
+
+            if n_sq == 0 or n_gr == 0:
+                print(f"No S(q) or g(r) data found for {label}, skipping")
+                continue
+
+            q_arr = sq_raw[valid_sq[0]]['q']
+            S_avg = np.mean([sq_raw[sid]['S_total'] for sid in valid_sq], axis=0)
+            r_arr = gr_raw[valid_gr[0]]['r']
+            D_avg = np.mean([gr_raw[sid]['D_r'] for sid in valid_gr], axis=0)
+
+        elif isinstance(item, tuple) and len(item) == 2:
+            sq_ens, gr_ens = item
+            q_arr = sq_ens['q']
+            S_avg = sq_ens['S_total']
+            r_arr = gr_ens['r']
+            D_avg = gr_ens['D_r']
+        else:
+            print(f"Warning: unrecognised type at index {i}, skipping")
+            continue
+
+        ax_sq.plot(q_arr, q_arr * (S_avg - 1), label=label, linewidth=1.5)
+        ax_gr.plot(r_arr, D_avg, label=label, linewidth=1.5)
+
+    ax_sq.axhline(0, color='k', linewidth=0.5, linestyle='--')
+    ax_sq.set_xlabel('q  [1/Å]')
+    ax_sq.set_ylabel('q(S(q) − 1)  [1/Å]')
+    ax_sq.set_title(f'q(S(q) − 1) — {weight_label}')
+    ax_sq.legend()
+    ax_sq.grid(True, alpha=0.3)
+
+    ax_gr.set_xlabel('r  [Å]')
+    ax_gr.set_ylabel('D(r)  [1/Å²]')
+    ax_gr.set_title(f'D(r) from FT — {weight_label}')
+    ax_gr.legend()
+    ax_gr.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Figure saved to {save_path}")
+    plt.show()
+
+
+# =====================================================================
+# OVERLAY: DIRECT-SPACE g(r) vs FT g(r) — Wolf et al. Fig. 2b style
+# =====================================================================
+
+def plot_direct_vs_ft(struct_ids, labels=('Direct space', 'FT from S(q)'),
+                      temperature=1800, use_weights=False,
+                      smoothed=True, element_pairs=None,
+                      figsize=(8, 10), save_path=None):
+    """
+    Overlay direct-space g(r) and FT-derived g(r) for the same ensemble.
+    Reproduces the orange vs red comparison in Wolf et al. Fig. 2b.
+
+    Parameters
+    ----------
+    struct_ids : list of str
+    labels : tuple of str  (direct_label, ft_label)
+    temperature : float
+    use_weights : bool
+    smoothed : bool  use KAMEL-LOBE smoothed direct-space RDFs
+    element_pairs : list of tuples or None
+    figsize : tuple
+    save_path : str or None
+    """
+    from src.rdf_v2 import (calculate_ensemble_partial_rdfs,
+                             calculate_ensemble_gr_from_sq)
+    from src.data_management_v2 import load_gr_from_sq
+    from src.data_management_v2 import STANDARD_PARAMS
+
+    if element_pairs is None:
+        element_pairs = STANDARD_PARAMS['element_pairs']
+
+    # Direct space
+    direct_rdfs = calculate_ensemble_partial_rdfs(
+        struct_ids=struct_ids, use_weights=use_weights,
+        temperature=temperature, smoothed=smoothed,
+        element_pairs=element_pairs
+    )
+
+    # FT route
+    gr_sq_raw = load_gr_from_sq(struct_ids, pairs='all')
+    gr_sq_data = {}
+    for sid, d in gr_sq_raw.items():
+        if isinstance(d, dict) and 'total' in d:
+            entry = d['total'].copy()
+            entry['D_partials'] = {
+                tuple(k.split('_')): v['D_r']
+                for k, v in d.items() if k != 'total'
+            }
+            entry['g_partials'] = {
+                tuple(k.split('_')): v['g_r']
+                for k, v in d.items() if k != 'total' and v.get('g_r') is not None
+            }
+            gr_sq_data[sid] = entry
+        else:
+            gr_sq_data[sid] = d
+
+    ft_rdfs = calculate_ensemble_gr_from_sq(
+        struct_ids, gr_sq_data=gr_sq_data,
+        use_weights=use_weights, temperature=temperature
+    )
+
+    n = len(element_pairs)
+    fig, axes = plt.subplots(n, 1, figsize=figsize)
+    if n == 1:
+        axes = [axes]
+
+    direct_label, ft_label = labels
+    lorch_note = ' (Lorch)' if ft_rdfs.get('use_lorch', True) else ''
+
+    for i, pair in enumerate(element_pairs):
+        ax = axes[i]
+
+        if pair in direct_rdfs:
+            r_d, g_d = direct_rdfs[pair]
+            ax.plot(r_d, g_d, color='tab:orange', label=direct_label,
+                    linewidth=1.5, alpha=0.9)
+
+        g_partials = ft_rdfs.get('g_partials', {})
+        if pair in g_partials and g_partials[pair] is not None:
+            r_ft = ft_rdfs['r']
+            g_ft = g_partials[pair]
+            ax.plot(r_ft, g_ft, color='tab:red', label=f'{ft_label}{lorch_note}',
+                    linewidth=1.5)
+
+        ax.set_xlabel('r  [Å]')
+        ax.set_ylabel('g(r)')
+        ax.set_title(f'{pair[0]}-{pair[1]}  g(r):  Direct vs FT')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Figure saved to {save_path}")
+    plt.show()
