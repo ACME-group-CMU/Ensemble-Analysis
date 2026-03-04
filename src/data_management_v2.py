@@ -684,22 +684,32 @@ def populate_ring_statistics(struct_ids, folder_path=POSCAR_DIR, cutoffs=None, m
     ensure_directories()
     
     from tqdm import tqdm
+
+    failed = []
     
     for struct_id in tqdm(struct_ids, desc="Calculating ring statistics"):
-        # Load structure
-        structure, _ = vasp_to_pymatgen(struct_id, folder_path)
-        
-        # Calculate ring statistics
-        ring_stats = calculate_ring_statistics_for_structure(
-            structure, 
-            cutoffs=cutoffs,
-            max_ring_size=max_ring_size
-        )
-        
-        # Save to file
-        output_file = os.path.join(RING_DIR, f'{struct_id}_rings.pkl')
-        with open(output_file, 'wb') as f:
-            pickle.dump(ring_stats, f)
+        try:
+            # Load structure
+            structure, _ = vasp_to_pymatgen(struct_id, folder_path)
+            
+            # Calculate ring statistics
+            ring_stats = calculate_ring_statistics_for_structure(
+                structure, 
+                cutoffs=cutoffs,
+                max_ring_size=max_ring_size
+            )
+            
+            # Save to file
+            output_file = os.path.join(RING_DIR, f'{struct_id}_rings.pkl')
+            with open(output_file, 'wb') as f:
+                pickle.dump(ring_stats, f)
+            
+        except Exception as e:
+            print(f"Error processing {struct_id}: {e}")
+            failed.append(struct_id)
+
+    if failed:
+        print(f"\nFailed to process the following structures: {failed}")
 
 # =====================================================================
 # LOADING FUNCTIONS (Read data from disk)
