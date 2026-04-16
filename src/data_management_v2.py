@@ -254,68 +254,76 @@ def populate_qn_distributions(struct_ids, folder_path=POSCAR_DIR):
         except Exception as e:
             print(f"Error processing Qn for structure {struct_id}: {e}")
 
-def populate_bond_angle_distributions(struct_ids, folder_path=POSCAR_DIR, 
-                                     angle_range=(60, 180), bins=120):
+def populate_bond_angle_distributions(struct_ids, folder_path=POSCAR_DIR,
+                                      angle_range=(60, 180), bins=120):
     """
-    Calculate and save bond angle distributions for each structure
-    Focuses on Si-O-Si angles (most important for glass structure)
+    Calculate and save bond angle distributions for each structure.
+    Stores Si-O-Si and O-Si-O angles separately.
+    'angles' key retained as Si-O-Si for backward compatibility.
     """
     ensure_directories()
-    
-    for struct_id in tqdm(struct_ids, desc="Calculating bond angle distributions"):
+
+    for struct_id in tqdm(struct_ids, desc="Calculating BADs"):
         try:
             structure, energy = vasp_to_pymatgen(struct_id, folder_path)
-            
-            # Find Si and O atoms
+
             si_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'Si']
-            o_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'O']
-            
-            # Distance threshold for bonds
+            o_indices  = [i for i, site in enumerate(structure) if site.specie.symbol == 'O']
             bond_threshold = 1.8
-            
-            # Collect all Si-O-Si angles
-            angles = []
-            
+
+            # --- Si-O-Si angles ---
+            si_o_si_angles = []
             for o_idx in o_indices:
-                # Find Si atoms bonded to this O
-                bonded_si = []
-                for si_idx in si_indices:
-                    dist = structure.get_distance(o_idx, si_idx)
-                    if dist < bond_threshold:
-                        bonded_si.append(si_idx)
-                
-                # If O is bridging (bonded to 2 Si), calculate angle
+                bonded_si = [si for si in si_indices
+                             if structure.get_distance(o_idx, si) < bond_threshold]
                 if len(bonded_si) == 2:
-                    si1_idx, si2_idx = bonded_si
-                    
-                    # Get all three distances with PBC
-                    d_si1_o = structure.get_distance(si1_idx, o_idx)
-                    d_si2_o = structure.get_distance(si2_idx, o_idx)
-                    d_si1_si2 = structure.get_distance(si1_idx, si2_idx)
-                    
-                    # Calculate angle using law of cosines
-                    # For angle at O: cos(angle) = (d1^2 + d2^2 - d_si_si^2) / (2*d1*d2)
-                    cos_angle = (d_si1_o**2 + d_si2_o**2 - d_si1_si2**2) / (2 * d_si1_o * d_si2_o)
-                    cos_angle = np.clip(cos_angle, -1, 1)
-                    angle = np.degrees(np.arccos(cos_angle))
-                    
-                    angles.append(angle)
-            
-            # Create histogram
-            hist, bin_edges = np.histogram(angles, bins=bins, range=angle_range)
+                    si1, si2 = bonded_si
+                    d1  = structure.get_distance(si1, o_idx)
+                    d2  = structure.get_distance(si2, o_idx)
+                    d12 = structure.get_distance(si1, si2)
+                    cos_a = np.clip((d1**2 + d2**2 - d12**2) / (2*d1*d2), -1, 1)
+                    si_o_si_angles.append(np.degrees(np.arccos(cos_a)))
+
+            # --- O-Si-O angles ---
+            o_si_o_angles = []
+            for si_idx in si_indices:
+                bonded_o = [o for o in o_indices
+                            if structure.get_distance(si_idx, o) < bond_threshold]
+                for i in range(len(bonded_o)):
+                    for j in range(i+1, len(bonded_o)):
+                        o1, o2 = bonded_o[i], bonded_o[j]
+                        d1  = structure.get_distance(si_idx, o1)
+                        d2  = structure.get_distance(si_idx, o2)
+                        d12 = structure.get_distance(o1, o2)
+                        cos_a = np.clip((d1**2 + d2**2 - d12**2) / (2*d1*d2), -1, 1)
+                        o_si_o_angles.append(np.degrees(np.arccos(cos_a)))
+
+            bin_edges = np.linspace(angle_range[0], angle_range[1], bins + 1)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-            
-            # Normalize to probability distribution
-            hist_normalized = hist / (np.sum(hist) * (bin_edges[1] - bin_edges[0]))
-            
+
+            def _make_hist(angles):
+                a = np.array(angles)
+                h, _ = np.histogram(a, bins=bin_edges)
+                bw = bin_edges[1] - bin_edges[0]
+                s  = h.sum()
+                return h / (s * bw) if s > 0 else h.astype(float), a
+
+            si_o_si_hist, si_o_si_arr = _make_hist(si_o_si_angles)
+            o_si_o_hist, o_si_o_arr   = _make_hist(o_si_o_angles)
+
             bad_data = {
-                'angles': np.array(angles),
-                'histogram': hist_normalized,
-                'bin_centers': bin_centers,
-                'bin_edges': bin_edges,
-                'num_angles': len(angles),
-                'mean_angle': np.mean(angles) if angles else 0,
-                'std_angle': np.std(angles) if angles else 0,
+                # backward compat
+                'angles':          si_o_si_arr,
+                'histogram':       si_o_si_hist,
+                'bin_centers':     bin_centers,
+                'bin_edges':       bin_edges,
+                # named angle types
+                'si_o_si_angles':  si_o_si_arr,
+                'si_o_si_hist':    si_o_si_hist,
+                'o_si_o_angles':   o_si_o_arr,
+                'o_si_o_hist':     o_si_o_hist,
+                'num_si_o_si':     len(si_o_si_angles),
+                'num_o_si_o':      len(o_si_o_angles),
                 'params': {
                     'bond_threshold': bond_threshold,
                     'angle_range': angle_range,
@@ -323,11 +331,11 @@ def populate_bond_angle_distributions(struct_ids, folder_path=POSCAR_DIR,
                     'source': f'{struct_id}.vasp'
                 }
             }
-            
+
             filepath = os.path.join(BAD_DIR, f'{struct_id}_bad.pkl')
             with open(filepath, 'wb') as f:
                 pickle.dump(bad_data, f)
-                
+
         except Exception as e:
             print(f"Error processing BAD for structure {struct_id}: {e}")
                                   
